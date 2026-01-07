@@ -8,7 +8,7 @@ from textwrap import TextWrapper
 from typing import Literal, Sequence
 
 from keymap_drawer.config import DrawConfig
-from keymap_drawer.draw.glyph import GlyphMixin
+from keymap_drawer.draw.glyph import GlyphMixin, LegendSegment
 from keymap_drawer.physical_layout import Point
 
 LegendType = Literal["tap", "hold", "shifted", "left", "right", "tl", "tr", "bl", "br"]
@@ -39,7 +39,7 @@ class UtilsMixin(GlyphMixin):
         return (' class="' + " ".join(c for c in classes if c) + '"') if classes else ""
 
     def _split_text(self, text: str, truncate: int = 0, line_width: int = 0) -> list[str]:
-        if self.legend_is_glyph(text):
+        if self.legend_has_glyphs(text):
             return [text]
 
         # do not split on double spaces, but do split on single
@@ -144,66 +144,100 @@ class UtilsMixin(GlyphMixin):
             f'height="{height}" width="{width}"{self._to_class_str(classes)}/>\n'
         )
 
-    def _draw_glyph_with_text(
+    def _draw_segments(
         self,
         p: Point,
-        name: str,
-        prefix: str,
-        suffix: str,
+        segments: list[LegendSegment],
         legend_type: LegendType,
         classes: Sequence[str],
+        debug: bool = True,  # TODO: set to False when done debugging
     ) -> None:
-        """Draw a glyph with optional prefix text on the left and suffix text on the right."""
-        width, height, d_x, d_y = self.get_glyph_dimensions(name, legend_type)
-
+        """Draw a sequence of text and glyph segments, centered at point p."""
         # Use same font size as hold/shifted text (11px) for consistency
         font_size = 11
-
-        # Calculate total width to center the group (estimate based on font size)
         char_width = font_size * 0.5  # approximate character width for monospace
-        prefix_width = len(prefix) * char_width if prefix else 0
-        suffix_width = len(suffix) * char_width if suffix else 0
+        glyph_glyph_gap = -4  # negative to compensate for glyph internal padding
+        text_gap = 2  # gap when text is involved
 
-        # Gap scales with text length (longer text needs more gap due to estimation errors)
-        prefix_gap = (2 + len(prefix) * 2) if prefix else 0
-        suffix_gap = 2 if suffix else 0
+        # Calculate width of each segment and gaps
+        segment_widths: list[float] = []
+        segment_gaps: list[float] = []  # gap after each segment (except last)
+        glyph_height = 0.0
 
-        # Shift glyph position to account for prefix/suffix and keep centered
-        total_extra_width = prefix_width + prefix_gap + suffix_gap + suffix_width
-        glyph_shift_x = (prefix_width + prefix_gap - suffix_gap - suffix_width) / 2
+        for i, seg in enumerate(segments):
+            if seg.is_glyph:
+                width, height, _, _ = self.get_glyph_dimensions(seg.content, legend_type)
+                segment_widths.append(width)
+                glyph_height = max(glyph_height, height)
+            else:
+                segment_widths.append(len(seg.content) * char_width)
 
-        glyph_x = p.x - d_x + glyph_shift_x
-        glyph_y = p.y - d_y
+            # Calculate gap after this segment
+            if i < len(segments) - 1:
+                next_seg = segments[i + 1]
+                # No gap between two glyphs, otherwise use text_gap
+                if seg.is_glyph and next_seg.is_glyph:
+                    segment_gaps.append(glyph_glyph_gap)
+                else:
+                    segment_gaps.append(text_gap)
 
-        # Draw glyph
-        glyph_classes = [*classes, "glyph", name]
-        self.out.write(
-            f'<use href="#{name}" xlink:href="#{name}" x="{round(glyph_x)}" y="{round(glyph_y)}" '
-            f'height="{height}" width="{width}"{self._to_class_str(glyph_classes)}/>\n'
-        )
+        # Total width including gaps
+        total_width = sum(segment_widths) + sum(segment_gaps)
 
-        # Text vertical position (centered with glyph)
-        text_y = glyph_y + height / 2  # center of glyph
+        # Starting x position (left edge of first segment)
+        current_x = p.x - total_width / 2
 
-        text_classes = [*classes, "glyph-text"]
+        # Get glyph dimensions for vertical positioning (use first glyph or default)
+        if glyph_height == 0:
+            _, glyph_height, _, _ = self.get_glyph_dimensions(segments[0].content, legend_type)
 
-        # Draw prefix text (to the left of glyph)
-        if prefix:
-            prefix_x = glyph_x - prefix_gap
-            self.out.write(
-                f'<text x="{round(prefix_x)}" y="{round(text_y)}" '
-                f'text-anchor="end" dominant-baseline="middle" font-size="{font_size:.1f}px"'
-                f'{self._to_class_str(text_classes)}>{escape(prefix)}</text>\n'
-            )
+        # Draw each segment
+        for i, seg in enumerate(segments):
+            seg_width = segment_widths[i]
 
-        # Draw suffix text (to the right of glyph)
-        if suffix:
-            suffix_x = glyph_x + width + suffix_gap
-            self.out.write(
-                f'<text x="{round(suffix_x)}" y="{round(text_y)}" '
-                f'text-anchor="start" dominant-baseline="middle" font-size="{font_size:.1f}px"'
-                f'{self._to_class_str(text_classes)}>{escape(suffix)}</text>\n'
-            )
+            if seg.is_glyph:
+                # Draw glyph
+                width, height, _, _ = self.get_glyph_dimensions(seg.content, legend_type)
+                glyph_classes = [*classes, "glyph", seg.content]
+                glyph_y = p.y - height / 2
+
+                # Debug: draw glyph bounding box
+                if debug:
+                    self.out.write(
+                        f'<rect x="{round(current_x)}" y="{round(glyph_y)}" '
+                        f'width="{width}" height="{height}" '
+                        f'fill="none" stroke="red" stroke-width="1"/>\n'
+                    )
+
+                self.out.write(
+                    f'<use href="#{seg.content}" xlink:href="#{seg.content}" '
+                    f'x="{round(current_x)}" y="{round(glyph_y)}" '
+                    f'height="{height}" width="{width}"{self._to_class_str(glyph_classes)}/>\n'
+                )
+            else:
+                # Draw text
+                text_classes = [*classes, "glyph-text"]
+                text_x = current_x + seg_width / 2  # center of text segment
+                text_height = font_size
+
+                # Debug: draw text bounding box
+                if debug:
+                    self.out.write(
+                        f'<rect x="{round(current_x)}" y="{round(p.y - text_height / 2)}" '
+                        f'width="{seg_width}" height="{text_height}" '
+                        f'fill="none" stroke="blue" stroke-width="1"/>\n'
+                    )
+
+                self.out.write(
+                    f'<text x="{round(text_x)}" y="{round(p.y)}" '
+                    f'text-anchor="middle" dominant-baseline="middle" font-size="{font_size:.1f}px"'
+                    f'{self._to_class_str(text_classes)}>{escape(seg.content)}</text>\n'
+                )
+
+            # Move to next segment position
+            current_x += seg_width
+            if i < len(segment_gaps):
+                current_x += segment_gaps[i]
 
     def _draw_legend(
         self, p: Point, words: Sequence[str], classes: Sequence[str], legend_type: LegendType, shift: float = 0
@@ -218,12 +252,12 @@ class UtilsMixin(GlyphMixin):
             classes.append("layer-activator")
 
         if len(words) == 1:
-            if parts := self.legend_glyph_parts(words[0]):
-                prefix, glyph, suffix = parts
-                if prefix or suffix:
-                    self._draw_glyph_with_text(p, glyph, prefix, suffix, legend_type, classes)
+            if segments := self.get_validated_segments(words[0]):
+                # Check if it's a single glyph (use original centered drawing)
+                if len(segments) == 1 and segments[0].is_glyph:
+                    self._draw_glyph(p, segments[0].content, legend_type, classes)
                 else:
-                    self._draw_glyph(p, glyph, legend_type, classes)
+                    self._draw_segments(p, segments, legend_type, classes)
                 return
 
         if is_layer:

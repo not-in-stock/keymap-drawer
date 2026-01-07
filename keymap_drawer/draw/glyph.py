@@ -6,6 +6,7 @@ and drawing SVG glyphs.
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import lru_cache, partial
 from pathlib import Path
 from random import random
@@ -21,6 +22,19 @@ from keymap_drawer.keymap import KeymapData, LayoutKey
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class LegendSegment:
+    """A segment of a legend - either text or a glyph."""
+
+    content: str
+    is_glyph: bool
+
+    @property
+    def glyph_name(self) -> str | None:
+        """Return glyph name if this is a glyph segment."""
+        return self.content if self.is_glyph else None
+
 FETCH_WORKERS = 8
 FETCH_TIMEOUT = 10
 N_RETRY = 5
@@ -30,8 +44,8 @@ CACHE_GLYPHS_PATH = Path(user_cache_dir("keymap-drawer", False)) / "glyphs"
 class GlyphMixin:
     """Mixin that handles SVG glyphs for KeymapDrawer."""
 
-    # Pattern to match glyph with optional prefix and suffix text: prefix$$glyph$$suffix
-    _glyph_parts_re = re.compile(r"^(?P<prefix>.*?)\$\$(?P<glyph>.*?)\$\$(?P<suffix>.*)$")
+    # Pattern to find all glyphs in a string: $$glyph_name$$
+    _glyph_pattern_re = re.compile(r"\$\$(?P<glyph>.*?)\$\$")
     _view_box_dimensions_re = re.compile(
         r'<svg.*viewbox="(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)".*>',
         flags=re.IGNORECASE | re.ASCII | re.DOTALL,
@@ -42,15 +56,54 @@ class GlyphMixin:
     cfg: DrawConfig
     keymap: KeymapData
 
+    @classmethod
+    def parse_legend_segments(cls, legend: str) -> list[LegendSegment]:
+        """
+        Parse a legend string into segments of text and glyphs.
+        Example: "hello$$mdi:icon1$$$$mdi:icon2$$world"
+                 -> [Text("hello"), Glyph("mdi:icon1"), Glyph("mdi:icon2"), Text("world")]
+        """
+        segments: list[LegendSegment] = []
+        last_end = 0
+
+        for match in cls._glyph_pattern_re.finditer(legend):
+            # Add text before this glyph (if any)
+            if match.start() > last_end:
+                text = legend[last_end : match.start()]
+                if text:
+                    segments.append(LegendSegment(content=text, is_glyph=False))
+
+            # Add the glyph
+            glyph_name = match.group("glyph")
+            segments.append(LegendSegment(content=glyph_name, is_glyph=True))
+            last_end = match.end()
+
+        # Add remaining text after last glyph (if any)
+        if last_end < len(legend):
+            text = legend[last_end:]
+            if text:
+                segments.append(LegendSegment(content=text, is_glyph=False))
+
+        return segments
+
+    @classmethod
+    def legend_has_glyphs(cls, legend: str) -> bool:
+        """Check if a legend contains any glyphs."""
+        return bool(cls._glyph_pattern_re.search(legend))
+
+    @classmethod
+    def extract_glyph_names(cls, legend: str) -> set[str]:
+        """Extract all glyph names from a legend string."""
+        return {match.group("glyph") for match in cls._glyph_pattern_re.finditer(legend)}
+
     def init_glyphs(self) -> None:
         """Preprocess all glyphs in the keymap to get their name to SVG mapping."""
 
         def find_key_glyph_names(key: LayoutKey) -> set[str]:
-            return {
-                glyph
-                for field in (key.tap, key.hold, key.shifted, key.left, key.right, key.tl, key.tr, key.bl, key.br)
-                if (glyph := self._legend_to_name(field))
-            }
+            names: set[str] = set()
+            for field in (key.tap, key.hold, key.shifted, key.left, key.right, key.tl, key.tr, key.bl, key.br):
+                names |= self.extract_glyph_names(field)
+            return names
 
         # find all named glyphs in the keymap
         names = set()
@@ -99,38 +152,19 @@ class GlyphMixin:
             fetch_fn = partial(_fetch_svg_url, use_local_cache=self.cfg.use_local_cache)
             return dict(zip(names, p.map(fetch_fn, names, urls, timeout=N_RETRY * (FETCH_TIMEOUT + 1))))
 
-    @classmethod
-    def _legend_to_name(cls, legend: str) -> str | None:
-        """Extract glyph name from legend string, ignoring any prefix/suffix text."""
-        if m := cls._glyph_parts_re.match(legend):
-            return m.group("glyph")
-        return None
-
-    @classmethod
-    def _legend_to_glyph_parts(cls, legend: str) -> tuple[str, str, str] | None:
+    def get_validated_segments(self, legend: str) -> list[LegendSegment] | None:
         """
-        Extract glyph parts from legend string.
-        Returns (prefix, glyph_name, suffix) tuple if legend contains a glyph, None otherwise.
-        Example: "hello$$mdi:bluetooth$$world" -> ("hello", "mdi:bluetooth", "world")
+        Parse legend and validate that all glyphs exist.
+        Returns segments if legend contains glyphs and all are valid, None otherwise.
         """
-        if m := cls._glyph_parts_re.match(legend):
-            return m.group("prefix"), m.group("glyph"), m.group("suffix")
-        return None
-
-    def legend_is_glyph(self, legend: str) -> str | None:
-        """Return glyph name if a given legend refers to a glyph and None otherwise."""
-        if (name := self._legend_to_name(legend)) and name in self.name_to_svg:
-            return name
-        return None
-
-    def legend_glyph_parts(self, legend: str) -> tuple[str, str, str] | None:
-        """
-        Return (prefix, glyph_name, suffix) if legend contains a valid glyph, None otherwise.
-        Validates that the glyph exists in name_to_svg.
-        """
-        if (parts := self._legend_to_glyph_parts(legend)) and parts[1] in self.name_to_svg:
-            return parts
-        return None
+        if not self.legend_has_glyphs(legend):
+            return None
+        segments = self.parse_legend_segments(legend)
+        # Validate all glyphs exist
+        for seg in segments:
+            if seg.is_glyph and seg.content not in self.name_to_svg:
+                return None
+        return segments
 
     def get_glyph_defs(self) -> str:
         """Return an SVG defs block with all glyph SVG definitions to be referred to later on."""
