@@ -256,6 +256,12 @@ class DrawConfig(BaseSettings, env_prefix="KEYMAP_", extra="ignore"):
     glyph_hold_size: int = 12
     glyph_shifted_size: int = 10
 
+    # settings for composed glyphs (mixing text and icons like "$$mdi:bluetooth$$0")
+    # gap between adjacent icons (negative values bring them closer to compensate internal padding)
+    adjacent_icon_gap: int = -4
+    # font size for text in composed glyphs
+    composed_glyph_text_size: int = 11
+
     # mapping of glyph names to be used in key fields to their SVG definitions
     glyphs: dict[str, str] = {}
 

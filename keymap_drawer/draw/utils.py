@@ -150,13 +150,13 @@ class UtilsMixin(GlyphMixin):
         segments: list[LegendSegment],
         legend_type: LegendType,
         classes: Sequence[str],
-        debug: bool = True,  # TODO: set to False when done debugging
+        debug: bool = False,
     ) -> None:
         """Draw a sequence of text and glyph segments, centered at point p."""
-        # Use same font size as hold/shifted text (11px) for consistency
-        font_size = 11
+        # Get settings from config
+        font_size = self.cfg.composed_glyph_text_size
         char_width = font_size * 0.5  # approximate character width for monospace
-        glyph_glyph_gap = -4  # negative to compensate for glyph internal padding
+        glyph_glyph_gap = self.cfg.adjacent_icon_gap  # negative to compensate for glyph internal padding
         text_gap = 2  # gap when text is involved
 
         # Calculate width of each segment and gaps
