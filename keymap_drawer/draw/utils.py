@@ -144,6 +144,67 @@ class UtilsMixin(GlyphMixin):
             f'height="{height}" width="{width}"{self._to_class_str(classes)}/>\n'
         )
 
+    def _draw_glyph_with_text(
+        self,
+        p: Point,
+        name: str,
+        prefix: str,
+        suffix: str,
+        legend_type: LegendType,
+        classes: Sequence[str],
+    ) -> None:
+        """Draw a glyph with optional prefix text on the left and suffix text on the right."""
+        width, height, d_x, d_y = self.get_glyph_dimensions(name, legend_type)
+
+        # Use same font size as hold/shifted text (11px) for consistency
+        font_size = 11
+
+        # Calculate total width to center the group (estimate based on font size)
+        char_width = font_size * 0.5  # approximate character width for monospace
+        prefix_width = len(prefix) * char_width if prefix else 0
+        suffix_width = len(suffix) * char_width if suffix else 0
+
+        # Gap scales with text length (longer text needs more gap due to estimation errors)
+        prefix_gap = (2 + len(prefix) * 2) if prefix else 0
+        suffix_gap = 2 if suffix else 0
+
+        # Shift glyph position to account for prefix/suffix and keep centered
+        total_extra_width = prefix_width + prefix_gap + suffix_gap + suffix_width
+        glyph_shift_x = (prefix_width + prefix_gap - suffix_gap - suffix_width) / 2
+
+        glyph_x = p.x - d_x + glyph_shift_x
+        glyph_y = p.y - d_y
+
+        # Draw glyph
+        glyph_classes = [*classes, "glyph", name]
+        self.out.write(
+            f'<use href="#{name}" xlink:href="#{name}" x="{round(glyph_x)}" y="{round(glyph_y)}" '
+            f'height="{height}" width="{width}"{self._to_class_str(glyph_classes)}/>\n'
+        )
+
+        # Text vertical position (centered with glyph)
+        text_y = glyph_y + height / 2  # center of glyph
+
+        text_classes = [*classes, "glyph-text"]
+
+        # Draw prefix text (to the left of glyph)
+        if prefix:
+            prefix_x = glyph_x - prefix_gap
+            self.out.write(
+                f'<text x="{round(prefix_x)}" y="{round(text_y)}" '
+                f'text-anchor="end" dominant-baseline="middle" font-size="{font_size:.1f}px"'
+                f'{self._to_class_str(text_classes)}>{escape(prefix)}</text>\n'
+            )
+
+        # Draw suffix text (to the right of glyph)
+        if suffix:
+            suffix_x = glyph_x + width + suffix_gap
+            self.out.write(
+                f'<text x="{round(suffix_x)}" y="{round(text_y)}" '
+                f'text-anchor="start" dominant-baseline="middle" font-size="{font_size:.1f}px"'
+                f'{self._to_class_str(text_classes)}>{escape(suffix)}</text>\n'
+            )
+
     def _draw_legend(
         self, p: Point, words: Sequence[str], classes: Sequence[str], legend_type: LegendType, shift: float = 0
     ) -> None:
@@ -157,8 +218,12 @@ class UtilsMixin(GlyphMixin):
             classes.append("layer-activator")
 
         if len(words) == 1:
-            if glyph := self.legend_is_glyph(words[0]):
-                self._draw_glyph(p, glyph, legend_type, classes)
+            if parts := self.legend_glyph_parts(words[0]):
+                prefix, glyph, suffix = parts
+                if prefix or suffix:
+                    self._draw_glyph_with_text(p, glyph, prefix, suffix, legend_type, classes)
+                else:
+                    self._draw_glyph(p, glyph, legend_type, classes)
                 return
 
         if is_layer:

@@ -30,7 +30,8 @@ CACHE_GLYPHS_PATH = Path(user_cache_dir("keymap-drawer", False)) / "glyphs"
 class GlyphMixin:
     """Mixin that handles SVG glyphs for KeymapDrawer."""
 
-    _glyph_name_re = re.compile(r"\$\$(?P<glyph>.*)\$\$")
+    # Pattern to match glyph with optional prefix and suffix text: prefix$$glyph$$suffix
+    _glyph_parts_re = re.compile(r"^(?P<prefix>.*?)\$\$(?P<glyph>.*?)\$\$(?P<suffix>.*)$")
     _view_box_dimensions_re = re.compile(
         r'<svg.*viewbox="(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)".*>',
         flags=re.IGNORECASE | re.ASCII | re.DOTALL,
@@ -100,14 +101,35 @@ class GlyphMixin:
 
     @classmethod
     def _legend_to_name(cls, legend: str) -> str | None:
-        if m := cls._glyph_name_re.search(legend):
+        """Extract glyph name from legend string, ignoring any prefix/suffix text."""
+        if m := cls._glyph_parts_re.match(legend):
             return m.group("glyph")
+        return None
+
+    @classmethod
+    def _legend_to_glyph_parts(cls, legend: str) -> tuple[str, str, str] | None:
+        """
+        Extract glyph parts from legend string.
+        Returns (prefix, glyph_name, suffix) tuple if legend contains a glyph, None otherwise.
+        Example: "hello$$mdi:bluetooth$$world" -> ("hello", "mdi:bluetooth", "world")
+        """
+        if m := cls._glyph_parts_re.match(legend):
+            return m.group("prefix"), m.group("glyph"), m.group("suffix")
         return None
 
     def legend_is_glyph(self, legend: str) -> str | None:
         """Return glyph name if a given legend refers to a glyph and None otherwise."""
         if (name := self._legend_to_name(legend)) and name in self.name_to_svg:
             return name
+        return None
+
+    def legend_glyph_parts(self, legend: str) -> tuple[str, str, str] | None:
+        """
+        Return (prefix, glyph_name, suffix) if legend contains a valid glyph, None otherwise.
+        Validates that the glyph exists in name_to_svg.
+        """
+        if (parts := self._legend_to_glyph_parts(legend)) and parts[1] in self.name_to_svg:
+            return parts
         return None
 
     def get_glyph_defs(self) -> str:
