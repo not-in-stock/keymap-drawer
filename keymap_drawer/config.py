@@ -203,6 +203,28 @@ class DrawConfig(BaseSettings, env_prefix="KEYMAP_", extra="ignore"):
                 fill: none;
             }
 
+            /* base font size for composite glyph text */
+            text.glyph-text {
+                font-size: 14px;
+            }
+
+            /* styling for composite glyph text (shifted/tl/tr positions) */
+            text.composite.shifted, text.composite.tl, text.composite.tr {
+                dominant-baseline: central;
+                font-size: 70%;
+            }
+
+            /* styling for composite glyph text (hold/bl/br positions) */
+            text.composite.hold, text.composite.bl, text.composite.br {
+                font-size: 70%;
+            }
+
+            /* tap composite text should also use 70% for consistency */
+            text.composite.tap {
+                dominant-baseline: central;
+                font-size: 70%;
+            }
+
             /* Start Tabler Icons Cleanup */
             /* cannot use height/width with glyphs */
             .icon-tabler > path {
@@ -259,6 +281,8 @@ class DrawConfig(BaseSettings, env_prefix="KEYMAP_", extra="ignore"):
     # settings for composed glyphs (mixing text and icons like "$$mdi:bluetooth$$0")
     # gap between adjacent icons (negative values bring them closer to compensate internal padding)
     adjacent_icon_gap: int = -4
+    # gap between adjacent icons for shifted/hold positions (smaller glyphs need different gap)
+    adjacent_shifted_icon_gap: int = 0
     # font size for text in composed glyphs
     composed_glyph_text_size: int = 11
 

@@ -154,9 +154,14 @@ class UtilsMixin(GlyphMixin):
     ) -> None:
         """Draw a sequence of text and glyph segments, centered at point p."""
         # Get settings from config
-        font_size = self.cfg.composed_glyph_text_size
+        # Base font size is 14px, composite uses 70% = ~10px
+        font_size = 14 * 0.7  # ~10px for composite text
         char_width = font_size * 0.5  # approximate character width for monospace
-        glyph_glyph_gap = self.cfg.adjacent_icon_gap  # negative to compensate for glyph internal padding
+        # Use different gap for smaller glyphs (shifted, hold, corners)
+        if legend_type in ("shifted", "hold", "left", "right", "tl", "tr", "bl", "br"):
+            glyph_glyph_gap = self.cfg.adjacent_shifted_icon_gap
+        else:
+            glyph_glyph_gap = self.cfg.adjacent_icon_gap
         text_gap = 2  # gap when text is involved
 
         # Calculate width of each segment and gaps
@@ -191,6 +196,18 @@ class UtilsMixin(GlyphMixin):
         if glyph_height == 0:
             _, glyph_height, _, _ = self.get_glyph_dimensions(segments[0].content, legend_type)
 
+        # Determine vertical alignment based on legend_type
+        # For shifted/tl/tr, align to top; for hold/bl/br, align to bottom; otherwise center
+        if legend_type in ("shifted", "tl", "tr"):
+            v_align = "top"
+        elif legend_type in ("hold", "bl", "br"):
+            v_align = "bottom"
+        else:
+            v_align = "middle"
+
+        # Check if this is a composite glyph (multiple segments)
+        is_composite = len(segments) > 1
+
         # Draw each segment
         for i, seg in enumerate(segments):
             seg_width = segment_widths[i]
@@ -199,7 +216,16 @@ class UtilsMixin(GlyphMixin):
                 # Draw glyph
                 width, height, _, _ = self.get_glyph_dimensions(seg.content, legend_type)
                 glyph_classes = [*classes, "glyph", seg.content]
-                glyph_y = p.y - height / 2
+                if is_composite:
+                    glyph_classes.append("composite")
+
+                # Position based on vertical alignment
+                if v_align == "top":
+                    glyph_y = p.y
+                elif v_align == "bottom":
+                    glyph_y = p.y - height
+                else:
+                    glyph_y = p.y - height / 2
 
                 # Debug: draw glyph bounding box
                 if debug:
@@ -217,20 +243,39 @@ class UtilsMixin(GlyphMixin):
             else:
                 # Draw text
                 text_classes = [*classes, "glyph-text"]
+                if is_composite:
+                    text_classes.append("composite")
                 text_x = current_x + seg_width / 2  # center of text segment
                 text_height = font_size
 
+                # Position text baseline based on vertical alignment
+                if v_align == "top":
+                    text_y = p.y + text_height / 2
+                    # Don't set baseline for composite - will be set via CSS
+                    text_baseline = None if is_composite else "hanging"
+                elif v_align == "bottom":
+                    text_y = p.y - text_height / 2
+                    text_baseline = "auto"
+                else:
+                    text_y = p.y
+                    # Don't set baseline for composite - will be set via CSS
+                    text_baseline = None if is_composite else "middle"
+
                 # Debug: draw text bounding box
                 if debug:
+                    box_y = p.y if v_align == "top" else (p.y - text_height if v_align == "bottom" else p.y - text_height / 2)
                     self.out.write(
-                        f'<rect x="{round(current_x)}" y="{round(p.y - text_height / 2)}" '
+                        f'<rect x="{round(current_x)}" y="{round(box_y)}" '
                         f'width="{seg_width}" height="{text_height}" '
                         f'fill="none" stroke="blue" stroke-width="1"/>\n'
                     )
 
+                baseline_attr = f' dominant-baseline="{text_baseline}"' if text_baseline else ""
+                # Don't set font-size attribute for composite - will be set via CSS
+                fontsize_attr = "" if is_composite else f' font-size="{font_size:.1f}px"'
                 self.out.write(
-                    f'<text x="{round(text_x)}" y="{round(p.y)}" '
-                    f'text-anchor="middle" dominant-baseline="middle" font-size="{font_size:.1f}px"'
+                    f'<text x="{round(text_x)}" y="{round(text_y)}" '
+                    f'text-anchor="middle"{baseline_attr}{fontsize_attr}'
                     f'{self._to_class_str(text_classes)}>{escape(seg.content)}</text>\n'
                 )
 
